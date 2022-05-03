@@ -1,0 +1,451 @@
+---
+title: "Project part 2"
+author: "Badrinath Narayanan"
+date: '2022-04-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(681)
+library(fpp3)
+library(tidyr)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+```{r, echo=FALSE}
+all.stocks = readr::read_csv('all_stocks_2006-01-01_to_2018-01-01.csv')
+```
+
+```{r}
+summary(all.stocks)
+```
+
+```{r,echo=FALSE}
+all.stocks.ts <- all.stocks %>% mutate(Date=as_date(Date)) %>% as_tsibble(key=Name,index=Date)
+```
+
+```{r,echo=FALSE}
+all.stocks.ts %>% autoplot(Close) + facet_wrap(~ Name) + labs(y="stock closing price", title = "Stock prices from year 2006 - 2017")
+```
+
+```{r,echo=FALSE}
+library(scatterPlotMatrix)
+scatterPlotMatrix(all.stocks.ts,categoricalCS="Name")
+```
+
+```{r,echo=FALSE}
+library(imputeTS)
+ggplot_na_distribution(all.stocks.ts$Close)
+```
+```{r,echo=FALSE}
+statsNA(all.stocks.ts$Close)
+```
+```{r,echo=FALSE}
+statsNA(all.stocks.ts$Open)
+```
+```{r,echo=FALSE}
+statsNA(all.stocks.ts$High)
+```
+
+
+```{r,echo=FALSE}
+statsNA(all.stocks.ts$Low)
+```
+
+```{r,echo=FALSE}
+all.stocks.ts %>%
+  filter(Name==c("GOOG","AAPL")) %>%
+  gg_lag(Close, geom = "point")  +
+  labs(x = "lag(Close, k)")
+```
+```{r,echo=FALSE}
+aapl.stocks <- all.stocks.ts %>%
+  filter(Name == "AAPL", year(Date) >= 2010) %>%
+  mutate(day = row_number()) %>%
+  update_tsibble(index = day, regular = TRUE)
+```
+
+```{r,echo=FALSE}
+all.stocks.ts %>%
+  fill_gaps() %>%
+    ACF(Close) %>%
+  autoplot() + labs(title="All stock closing price autocorrelation")
+```
+
+```{r,echo=FALSE}
+aapl.stocks %>%
+  ACF(Close) %>%
+  autoplot() + labs(title="Apple stock closing price autocorrelation")
+```
+```{r,echo=FALSE}
+dcmp <- all.stocks.ts %>%
+  fill_gaps(Close = 0) %>%
+  model(stl = STL(Close))
+components(dcmp)
+```
+```{r,echo=FALSE}
+components(dcmp) %>% autoplot()
+```
+```{r,echo=FALSE}
+components(dcmp) %>%
+  as_tsibble() %>%
+  autoplot(Close, colour = "gray") +
+  geom_line(aes(y=season_adjust), colour = "#0072B2") +
+  labs(y = "close price",
+       title = "close price for stock")
+```
+```{r,echo=FALSE}
+all.stocks.5ma <- all.stocks.ts %>% fill_gaps(Close =0) %>%
+  mutate(
+    `5-MA` = slider::slide_dbl(Close, mean,
+                .before = 2, .after = 2, .complete = TRUE)
+  )
+```
+
+```{r,echo=FALSE}
+all.stocks.5ma %>%
+  autoplot(Close) +
+  geom_line(aes(y = `5-MA`), colour = "#D55E00") + facet_wrap(~ Name) +
+  labs(y = "Close Price",
+       title = "close price for stock") +
+  guides(colour = guide_legend(title = "series"))
+```
+
+```{r,echo=FALSE}
+all.stocks.ts %>% fill_gaps(Close =0) %>% features(Close,feat_acf)
+```
+```{r,echo=FALSE}
+all.stocks.ts %>% fill_gaps(Close =0) %>% features(Close,feat_stl)
+```
+```{r,echo=FALSE}
+all.stocks.ts %>% fill_gaps(Close =0) %>%
+  features(Close, feat_stl) %>%
+  ggplot(aes(x = trend_strength, y = seasonal_strength_week, Col = vars(Name))) +
+  geom_point() 
+```
+```{r,echo=FALSE}
+# Set training data from 1992 to 2006
+train <- aapl.stocks %>%
+  filter_index("2006" ~ "2016")
+# Fit the models
+stocks_fit <- train %>%
+  model(
+    Mean = MEAN(Close),
+    `Naïve` = NAIVE(Close),
+    `Seasonal naïve` = SNAIVE(Close)
+  )
+# Generate forecasts for 2 years
+stocks_fc <- stocks_fit %>% forecast(h = "2 years")
+# Plot forecasts against actual values
+stocks_fc %>%
+  autoplot(train, level = NULL) +
+  autolayer(
+    filter_index(aapl.stocks, "2017" ~ .),
+    colour = "black",facets=TRUE
+  ) +
+  labs(
+    y = "Close prices",
+    title = "Forecasts for closing price"
+  ) +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+```{r,echo=FALSE}
+# Re-index based on trading days
+google_stock <- all.stocks.ts %>%
+  filter(Name == "GOOGL", year(Date) >= 2015) %>%
+  mutate(day = row_number()) %>%
+  update_tsibble(index = day, regular = TRUE)
+# Filter the year of interest
+google_2015 <- google_stock %>% filter(year(Date) == 2015)
+# Fit the models
+google_fit <- google_2015 %>%
+  model(
+    Mean = MEAN(Close),
+    `Naïve` = NAIVE(Close),
+    Drift = NAIVE(Close ~ drift())
+  )
+# Produce forecasts for the trading days in January 2016
+google_jan_2016 <- google_stock %>%
+  filter(yearmonth(Date) == yearmonth("2016 Jan"))
+google_fc <- google_fit %>%
+  forecast(new_data = google_jan_2016)
+# Plot the forecasts
+google_fc %>%
+  autoplot(google_2015, level = NULL) +
+  autolayer(google_jan_2016, Close, colour = "black") +
+  labs(y = "$US",
+       title = "Google daily closing stock prices",
+       subtitle = "(Jan 2015 - Jan 2016)") +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+```{r,echo=FALSE}
+autoplot(google_2015, Close) +
+  labs(y = "$US",
+       title = "Google daily closing stock prices in 2015")
+```
+```{r,echo=FALSE}
+aug <- google_2015 %>%
+  model(NAIVE(Close)) %>%
+  augment()
+autoplot(aug, .innov) +
+  labs(y = "$US",
+       title = "Residuals from the naïve method")
+```
+```{r,echo=FALSE}
+aug %>%
+  ggplot(aes(x = .innov)) +
+  geom_histogram() +
+  labs(title = "Histogram of residuals")
+```
+```{r,echo=FALSE}
+aug %>%
+  ACF(.innov) %>%
+  autoplot() +
+  labs(title = "Residuals from the naïve method")
+```
+```{r,echo=FALSE}
+google_2015 %>%
+  model(NAIVE(Close)) %>%
+  gg_tsresiduals()
+```
+```{r,echo=FALSE}
+aug %>% features(.innov, box_pierce, lag = 10, dof = 0)
+#> # A tibble: 1 × 4
+#>   Symbol .model       bp_stat bp_pvalue
+#>   <chr>  <chr>          <dbl>     <dbl>
+#> 1 GOOG   NAIVE(Close)    7.74     0.654
+
+aug %>% features(.innov, ljung_box, lag = 10, dof = 0)
+#> # A tibble: 1 × 4
+#>   Symbol .model       lb_stat lb_pvalue
+#>   <chr>  <chr>          <dbl>     <dbl>
+#> 1 GOOG   NAIVE(Close)    7.91     0.637
+```
+```{r,echo=FALSE}
+fit <- google_2015 %>% model(RW(Close ~ drift()))
+tidy(fit)
+#> # A tibble: 1 × 7
+#>   Symbol .model              term  estimate std.error statistic p.value
+#>   <chr>  <chr>               <chr>    <dbl>     <dbl>     <dbl>   <dbl>
+#> 1 GOOG   RW(Close ~ drift()) b        0.944     0.705      1.34   0.182
+```
+```{r,echo=FALSE}
+augment(fit) %>% features(.innov, ljung_box, lag=10, dof=1)
+#> # A tibble: 1 × 4
+#>   Symbol .model              lb_stat lb_pvalue
+#>   <chr>  <chr>                 <dbl>     <dbl>
+#> 1 GOOG   RW(Close ~ drift())    7.91     0.543
+```
+```{r,echo=FALSE}
+google_2015 %>%
+  model(NAIVE(Close)) %>%
+  forecast(h = 10) %>%
+  hilo()
+```
+```{r,echo=FALSE}
+google_2015 %>%
+  model(NAIVE(Close)) %>%
+  forecast(h = 10) %>%
+  autoplot(google_2015) +
+  labs(title="Google daily closing stock price", y="$US" )
+```
+```{r,echo=FALSE}
+fit <- google_2015 %>%
+  model(NAIVE(Close))
+sim <- fit %>% generate(h = 30, times = 5, bootstrap = TRUE)
+sim
+```
+```{r,echo=FALSE}
+google_2015 %>%
+  ggplot(aes(x = day)) +
+  geom_line(aes(y = Close)) +
+  geom_line(aes(y = .sim, colour = as.factor(.rep)),
+    data = sim) +
+  labs(title="Google daily closing stock price", y="$US" ) +
+  guides(colour = "none")
+```
+```{r,echo=FALSE}
+fc <- fit %>% forecast(h = 30, bootstrap = TRUE)
+fc
+```
+```{r,echo=FALSE}
+autoplot(fc, google_2015) +
+  labs(title="Google daily closing stock price", y="$US" )
+```
+```{r,echo=FALSE}
+google_2015 %>%
+  model(NAIVE(Close)) %>%
+  forecast(h = 10, bootstrap = TRUE, times = 1000) %>%
+  hilo()
+
+```
+```{r, echo=FALSE}
+aapl.stocks.new <- all.stocks.ts %>%
+  filter(Name == "AAPL")
+aapl.stocks.new.train <- aapl.stocks.new %>%
+  filter(year(Date) <= 2016)
+
+aapl.stocks.new.fit <- aapl.stocks.new.train %>%
+  model(
+    Mean = MEAN(Close),
+    `Naïve` = NAIVE(Close),
+    `Seasonal naïve` = SNAIVE(Close),
+    Drift = RW(Close ~ drift())
+  )
+
+aapl.stocks.new.fc <- aapl.stocks.new.fit %>%
+  forecast(h = "2 years")
+
+aapl.stocks.new.fc %>%
+  autoplot(
+    aapl.stocks.new %>% filter(year(Date) <=2016),
+    level = NULL
+  ) +
+  labs(
+    y = "Closing price",
+    title = "Forecasts for apple stocks closing price"
+  ) +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+```{r,echo=FALSE}
+accuracy(aapl.stocks.new.fc, aapl.stocks.new)
+```
+```{r,echo=FALSE}
+google_fit <- google_2015 %>%
+  model(
+    Mean = MEAN(Close),
+    `Naïve` = NAIVE(Close),
+    Drift = RW(Close ~ drift())
+  )
+
+google_fc <- google_fit %>%
+  forecast(google_jan_2016)
+```
+
+```{r,echo=FALSE}
+accuracy(google_fc, google_stock)
+```
+```{r,echo=FALSE}
+# Time series cross-validation accuracy
+google_2015_tr <- google_2015 %>%
+  stretch_tsibble(.init = 3, .step = 1) %>%
+  relocate(Date, Name, .id)
+google_2015_tr
+```
+```{r,echo=FALSE}
+# TSCV accuracy
+google_2015_tr %>%
+  model(RW(Close ~ drift())) %>%
+  forecast(h = 10) %>%
+  accuracy(google_2015)
+# Training set accuracy
+google_2015 %>%
+  model(RW(Close ~ drift())) %>%
+  accuracy()
+```
+```{r,echo=FALSE}
+google_2015_tr <- google_2015 %>%
+  stretch_tsibble(.init = 3, .step = 1)
+fc <- google_2015_tr %>%
+  model(RW(Close ~ drift())) %>%
+  forecast(h = 8) %>%
+  group_by(.id) %>%
+  mutate(h = row_number()) %>%
+  ungroup() %>%
+  as_fable(response = "Close", distribution = Close)
+fc %>%
+  accuracy(google_2015, by = c("h", ".model")) %>%
+  ggplot(aes(x = h, y = RMSE)) +
+  geom_point()
+```
+```{r,echo=FALSE}
+fit_googl_stocks <- all.stocks.ts %>% filter(Name=="GOOGL") %>%
+  model(TSLM(Close ~ Open + High + Low + Volume + Open:High + Open:Low + Open:Volume + High:Low+ High:Volume + Low:Volume )) %>%
+  report()
+```
+```{r,echo=FALSE}
+augment(fit_googl_stocks) %>%
+  ggplot(aes(x = Date)) +
+  geom_line(aes(y = Close, colour = "Data")) +
+  geom_line(aes(y = .fitted, colour = "Fitted")) +
+  labs(y = NULL,
+    title = "close price"
+  ) +
+  scale_colour_manual(values=c(Data="black",Fitted="#D55E00")) +
+  guides(colour = guide_legend(title = NULL))
+```
+```{r,echo=FALSE}
+augment(fit_googl_stocks) %>%
+  ggplot(aes(x = Close, y = .fitted)) +
+  geom_point() +
+  labs(
+    y = "Fitted (predicted values)",
+    x = "Data (actual values)",
+    title = "Close prices"
+  ) +
+  geom_abline(intercept = 0, slope = 1)
+```
+```{r,echo=FALSE}
+augment(fit_googl_stocks) %>%
+  features(.innov, ljung_box, lag = 10, dof = 5)
+#> # A tibble: 1 × 3
+#>   .model lb_stat lb_pvalue
+#>   <chr>    <dbl>     <dbl>
+#> 1 tslm      18.9   0.00204
+```
+```{r,echo=FALSE}
+augment(fit_googl_stocks) %>%
+  ggplot(aes(x = .fitted, y = .resid)) +
+  geom_point() + labs(x = "Fitted", y = "Residuals")
+```
+```{r,echo=FALSE}
+glance(fit_googl_stocks) %>%
+  select(adj_r_squared, CV, AIC, AICc, BIC)
+#> # A tibble: 1 × 5
+#>   adj_r_squared    CV   AIC  AICc   BIC
+#>           <dbl> <dbl> <dbl> <dbl> <dbl>
+#> 1         0.763 0.104 -457. -456. -437.
+```
+```{r,echo=FALSE}
+train <- all.stocks.ts %>% filter(Name=="GOOGL") 
+fit <- train %>%
+  model(TSLM(Close ~ trend() + season()))
+fc <- forecast(fit)
+fc %>%
+  autoplot(train) +
+  labs(
+    title = "Forecasts of close price using regression",
+    y = "close price"
+  )
+```
+```{r,echo=FALSE}
+google_fit <- all.stocks.ts %>% fill_gaps(Close=0) %>%
+  filter(Name == "GOOGL") %>%
+  model(arima210 = ARIMA(Close ~ pdq(2,1,0)),
+        arima013 = ARIMA(Close ~ pdq(0,1,3)),
+        stepwise = ARIMA(Close),
+        search = ARIMA(Close, stepwise=FALSE))
+
+
+glance(google_fit) %>% arrange(AICc) %>% select(.model:BIC)
+
+```
+```{r,echo=FALSE}
+google_fit %>%
+  select(search) %>%
+  gg_tsresiduals()
+```
+```{r,echo=FALSE}
+augment(google_fit) %>%
+  filter(.model=='search') %>%
+  features(.innov, ljung_box, lag = 10, dof = 3)
+```
+```{r,echo=FALSE}
+google_fit %>%
+  forecast(h=5) %>%
+  filter(.model=='search') %>%
+  autoplot(all.stocks.ts %>% filter(Name=="GOOGL"))
+```
+
+
